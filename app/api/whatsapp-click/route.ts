@@ -2,31 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
-);
+export const dynamic = "force-dynamic";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const notificationEmail = process.env.NOTIFICATION_EMAIL || "trade@eximobile.com";
 
 export async function POST(req: NextRequest) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const supabase =
+    supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
+
   try {
     const body = await req.json();
     const { page, product } = body;
-
     const userAgent = req.headers.get("user-agent") || "";
 
-    // 1. Save click to Supabase
-    const { error: dbError } = await supabase
-      .from("whatsapp_clicks")
-      .insert([{ page, product: product || null, user_agent: userAgent }]);
-
-    if (dbError) {
-      console.error("Supabase whatsapp_clicks error:", dbError);
+    if (supabase) {
+      const { error: dbError } = await supabase
+        .from("whatsapp_clicks")
+        .insert([{ page, product: product || null, user_agent: userAgent }]);
+      if (dbError) console.error("Supabase whatsapp_clicks error:", dbError);
     }
 
-    // 2. Send email notification to trade@eximobile.com
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background: #25D366; padding: 24px; border-radius: 8px 8px 0 0;">
@@ -65,9 +64,7 @@ export async function POST(req: NextRequest) {
       html: emailHtml,
     });
 
-    if (emailError) {
-      console.error("Resend whatsapp-click email error:", emailError);
-    }
+    if (emailError) console.error("Resend whatsapp-click email error:", emailError);
 
     return NextResponse.json({ success: true });
   } catch (err) {
