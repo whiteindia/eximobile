@@ -2,15 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
-);
+// Force dynamic — this route must never be statically analysed at build time
+export const dynamic = "force-dynamic";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const notificationEmail = process.env.NOTIFICATION_EMAIL || "trade@eximobile.com";
 
 export async function POST(req: NextRequest) {
+  // Lazy-init clients so missing env vars don't crash at build time
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const supabase =
+    supabaseUrl && supabaseKey
+      ? createClient(supabaseUrl, supabaseKey)
+      : null;
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
+
   try {
     const body = await req.json();
     const { name, email, phone, company, country, product, message } = body;
@@ -19,19 +26,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // 1. Save inquiry to Supabase
-    const { data: inquiry, error: dbError } = await supabase
-      .from("inquiries")
-      .insert([{ name, email, phone, company, country, product_slug: product, message }])
-      .select()
-      .single();
+    // 1. Save inquiry to Supabase (if configured)
+    let inquiryId: string | undefined;
+    if (supabase) {
+      const { data: inquiry, error: dbError } = await supabase
+        .from("inquiries")
+        .insert([{ name, email, phone, company, country, product_slug: product, message }])
+        .select()
+        .single();
 
-    if (dbError) {
-      console.error("Supabase error:", dbError);
-      // Don't fail the request if DB save fails — still send email
+      if (dbError) {
+        console.error("Supabase error:", dbError);
+      } else {
+        inquiryId = inquiry?.id;
+      }
     }
 
-    // 2. Send email notification to trade@eximobile.com
+    // 2. Send email notification
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background: #0A1628; padding: 24px; border-radius: 8px 8px 0 0;">
@@ -73,7 +84,7 @@ export async function POST(req: NextRequest) {
       console.error("Resend email error:", emailError);
     }
 
-    return NextResponse.json({ success: true, inquiryId: inquiry?.id });
+    return NextResponse.json({ success: true, inquiryId });
   } catch (err) {
     console.error("Inquiry API error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
