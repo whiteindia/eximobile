@@ -1,0 +1,117 @@
+name: Deploy to production
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch: {}
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build
+        run: npm run build
+        env:
+          # Baked into the client bundle at build time -- must be GitHub secrets.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+
+      - name: Assemble standalone bundle
+        run: |
+          cp -r public .next/standalone/public
+          mkdir -p .next/standalone/.next
+          cp -r .next/static .next/standalone/.next/static
+          cp -r deploy .next/standalone/deploy
+
+      - name: Deploy code over SSH
+        uses: burnett01/rsync-deployments@7.0.2
+        with:
+          switches: -avzr --delete --exclude=".env"
+          path: .next/standalone/
+          remote_path: /opt/eximobile-website/
+          remote_host: ${{ secrets.EC2_HOST }}
+          remote_user: ${{ secrets.EC2_USER }}
+          remote_key: ${{ secrets.EC2_SSH_KEY }}
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Write server env from secrets
+        run: |
+          {
+            echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}"
+            echo "NOTIFICATION_EMAIL=${{ secrets.NOTIFICATION_EMAIL }}"
+          } | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+              "cat > /opt/eximobile-website/.env && chmod 600 /opt/eximobile-website/.env"
+
+      - name: Install Node runtime, systemd + nginx + SSL, restart service
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/eximobile-website
+
+            # ── Node 22 runtime (Next.js 16 needs it; box shipped with 18) ──
+            if ! node -v 2>/dev/null | grep -qE '^v(2[0-9]|[3-9][0-9])\.'; then
+              curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+              sudo apt-get install -y -q nodejs
+            fi
+
+            # ── log dir ─────────────────────────────────────
+            sudo mkdir -p /var/log/eximobile-website
+            sudo chown ubuntu:ubuntu /var/log/eximobile-website
+
+            # ── systemd service ─────────────────────────────
+            sudo cp deploy/eximobile-website.service /etc/systemd/system/
+            sudo systemctl daemon-reload
+            sudo systemctl enable eximobile-website.service
+
+            # ── nginx vhost ──────────────────────────────────
+            sudo cp deploy/nginx-eximobile.com.conf /etc/nginx/sites-available/eximobile.com
+            sudo ln -sf /etc/nginx/sites-available/eximobile.com /etc/nginx/sites-enabled/eximobile.com
+            sudo nginx -t
+            sudo systemctl reload nginx
+
+            # ── SSL (only once DNS points here; safe to retry) ─
+            if [ ! -f /etc/letsencrypt/live/eximobile.com/fullchain.pem ]; then
+              echo "Requesting SSL certificate..."
+              sudo certbot --nginx -d eximobile.com -d www.eximobile.com \
+                --non-interactive --agree-tos --email yugandharb.wi@gmail.com --redirect \
+                || echo "Certbot failed -- DNS may not have propagated yet. Will retry on next deploy."
+            else
+              sudo certbot install --cert-name eximobile.com --nginx --non-interactive --redirect
+              sudo systemctl reload nginx
+            fi
+
+            # ── restart app ──────────────────────────────────
+            sudo systemctl restart eximobile-website.service
+            sleep 2
+            sudo systemctl is-active eximobile-website.service
+
+            echo "=== Deploy complete: https://eximobile.com ==="
