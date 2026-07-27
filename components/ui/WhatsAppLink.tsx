@@ -11,7 +11,7 @@ interface WhatsAppLinkProps {
   "aria-label"?: string;
 }
 
-const BASE_NUMBER = "919848632875";
+const BASE_NUMBER = "919553337770";
 
 export default function WhatsAppLink({
   message = "Hello EXIMOBILE, I would like to inquire about your products.",

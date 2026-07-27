@@ -62,7 +62,7 @@ export default function ContactCTA() {
           {/* Contact details */}
           <div className="mt-12 flex flex-col sm:flex-row items-center justify-center gap-8 text-white/60 text-sm">
             <span>📧 trade@eximobile.com</span>
-            <span>📱 +91 9493337733</span>
+            <span>📱 +91 9553337770</span>
             <span>🌐 www.eximobile.com</span>
           </div>
         </motion.div>

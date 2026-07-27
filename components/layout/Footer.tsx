@@ -109,11 +109,11 @@ export default function Footer() {
                 trade@eximobile.com
               </a>
               <a
-                href="tel:+919493337733"
+                href="tel:+919553337770"
                 className="flex items-center gap-2 text-white/60 hover:text-gold text-sm transition-colors"
               >
                 <Phone className="w-4 h-4 text-gold shrink-0" />
-                +91 9493337733
+                +91 9553337770
               </a>
             </div>
             <Link
